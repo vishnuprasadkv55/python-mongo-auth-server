@@ -3,8 +3,9 @@ from app.auth.email import send_mail
 from flask.json import jsonify
 from . import auth
 from app.config import db
-from .services import forgot_password, login_user, refresh_current_token, register_user, resend_verification_code, save_new_password, verify_user
+from .services import forgot_password, login_user, refresh_current_token, register_user, resend_verification_code, save_new_password, verify_user, token_required
 from flask import request, abort
+
 VERIFICATION_CODE_LENGTH = 5
 
 
@@ -78,3 +79,11 @@ def refresh():
         return response
     else:
         abort(403, response)
+
+@auth.route('/api', methods=['POST'])
+@token_required
+def get_api():
+    return {
+        'status': 'success',
+        'message': 'hello'
+    }

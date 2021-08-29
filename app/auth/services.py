@@ -1,4 +1,5 @@
-from app.utils.dict import dotdict
+from flask.globals import request
+from app.utils.dict import DotDict
 from .email import send_mail
 from app.auth.email import send_mail
 from . import auth
@@ -9,7 +10,9 @@ import string
 import secrets
 import os
 import jwt
+from functools import wraps
 from datetime import datetime, timedelta
+import uuid
 users = db.users
 temp_users = db.temp_users
 access_tokens = db.access_tokens
@@ -125,58 +128,93 @@ def login_user(data):
         return {"status": 'failed', 'exception': 'userDoesNotExist'}
     else:
         checkpw = bcrypt.checkpw(data['password'].encode('utf8'), user['password'])
-        print('hey')
         if checkpw:
-            key = os.environ.get(APP_SECRET_KEY)
             payload = {
                 "sub": str(user['_id']),
                 "username": user["username"],
             }
-            access_token = jwt_encode(payload, timedelta(days=0, minutes=10))
-            refresh_token = jwt_encode(payload, timedelta(days=0, minutes=30))
+            tokens = generate_access_token_refresh_token(payload)
             try: 
-                family_id = access_tokens.insert({"access_token": access_token, "valid": True})
-                refresh_tokens.insert_one({"family_id": family_id, "refresh_token": refresh_token, "valid": True})
+                family_id = uuid.uuid4()
+                insert_refresh_token_access_token_pair(user['_id'], tokens['refresh_token'], tokens['access_token'], family_id)
             except Exception as exception:
                 print(exception)
-            return {'status': 'success', 'access_token': access_token, 'refresh_token': refresh_token }
+            return {'status': 'success', 'access_token': tokens['access_token'], 'refresh_token': tokens['refresh_token'] }
         else:
             return {"status": 'failed', 'exception': 'authenticationFailed'}
     
+def generate_access_token_refresh_token(payload):
+    access_token_payload = {
+        **payload,
+        'scope': 'openid profile email address phone api'
+    }
+    access_token = jwt_encode(access_token_payload, timedelta(days=0, minutes=0, seconds=30))
+    refresh_token = jwt_encode(payload, timedelta(days=0, minutes=0, seconds=60))
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token
+    }
+def insert_refresh_token_access_token_pair(created_by,refresh_token, access_token, family_id ):
+    refresh_tokens.insert_one({"family_id": family_id, 
+    "refresh_token": refresh_token, "valid": True, 
+    "created_at": datetime.utcnow(),
+    "created_by": created_by})
+    access_tokens.insert({"family_id": family_id, 
+    "created_at": datetime.utcnow(),
+    "access_token": access_token, 
+    "valid": True, 
+    "created_by": created_by})
+
 def refresh_current_token(data):
     refresh_token = refresh_tokens.find_one({'refresh_token': data['refresh_token']})
-    payload_response = jwt_decode(data['refresh_token'])
-    if payload_response['status'] == 'failed':
-        return payload_response
+
     if refresh_token is None:
         return {"status": 'failed', "exception": "refreshTokenForbiddenError"}
     else:        
-        access_token = access_tokens.find_one({'_id': refresh_token['family_id'], 'valid': True})
-        if access_token is None:
-            return {"status": 'failed', "exception": "accessTokenForbiddenError"}
-        elif refresh_token['valid'] is not True:
-            access_tokens.delete_many({'_id': refresh_token['family_id']})
+        # access_token = access_tokens.find_one({'_id': refresh_token['family_id'], 'valid': True})
+        # if access_token is None:
+        #     return {"status": 'failed', "exception": "accessTokenForbiddenError"}
+        payload_response = jwt_decode(data['refresh_token'])
+        if payload_response['status'] == 'failed' and not refresh_token['valid']:
+            access_tokens.delete_many({'family_id': refresh_token['family_id']})
             refresh_tokens.delete_many({'family_id': refresh_token['family_id']})
             return {'status': 'failed', 'exception': 'malpractice'}
-        elif access_token and refresh_token['valid']:
-            refresh_tokens.update_one({'_id': refresh_token["_id"]}, {'$set': {'valid': False}})
-            # old_refresh_token_payload = jwt_decode(data['refresh_token'])
-            payload_response = jwt_decode(access_token['access_token'])
+        elif refresh_token['valid']: 
             if payload_response['status'] == 'failed':
-                access_tokens.delete_many({'_id': refresh_token['family_id']})
-                refresh_tokens.delete_many({'family_id': refresh_token['family_id']})
                 return payload_response
+            refresh_tokens.update_one({'_id': refresh_token["_id"]}, {'$set': {'valid': False}})
+            # payload_response = jwt_decode(access_token['access_token'])
+            # if payload_response['status'] == 'failed':
+            #     if payload_response['invalidToken']:
+            #         return payload_response
 
             payload = {
                 "sub": payload_response['payload']['sub'],
                 "username": payload_response['payload']['username'],
             }
-            
-            new_refresh_token = jwt_encode(payload, timedelta(days=0, minutes=30))
-            new_access_token = jwt_encode(payload, timedelta(days=0, minutes=10))
-            # family_id = access_tokens.insert({"access_token": new_access_token, "valid": True})
-            access_tokens.update_one({'_id': refresh_token['family_id']}, {'$set': {"access_token": new_access_token}})
-            refresh_tokens.insert_one({"family_id": refresh_token['family_id'], 'refresh_token': new_refresh_token,'access_token': new_access_token, 'valid': True})
-            return {'status': 'success', 'access_token': new_access_token, 'refresh_token': new_refresh_token }
+            tokens = generate_access_token_refresh_token(payload)
+            # access_tokens.update_one({'_id': refresh_token['family_id']}, {'$set': {"access_token": new_access_token}})
+            insert_refresh_token_access_token_pair(refresh_token['created_by'], tokens['refresh_token'],tokens['access_token'],  refresh_token['family_id'])
+            return {'status': 'success', 'access_token': tokens['access_token'], 'refresh_token': tokens['refresh_token'] }
         
-    
+
+# decorators
+
+def token_required(func):
+    @wraps(func)
+    def token_decorator(*args, **kwargs):
+        token = None
+        print(kwargs.get('data'))
+        if 'x-access-token' in request.headers:
+            token = request.headers['x-access-token']
+        if not token:
+            return {'message': 'a valid token missing'}
+        data = jwt_decode(token)
+        data = DotDict(data)
+        if data.status == 'failed':
+            return data
+        if ('scope' not in data.payload) or ('api' not in data.payload.scope):
+            return {'message': 'a valid token missing'}
+        else:
+            return func(*args, **kwargs)
+    return token_decorator
