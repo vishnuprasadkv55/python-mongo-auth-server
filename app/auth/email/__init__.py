@@ -1,7 +1,7 @@
 from mailjet_rest import Client
 import os
-api_key = '4a4ef903970dec3129ce666ea0b59112'
-api_secret = '19aea16ae7c077332757a29db42b9162'
+api_key = os.environ.get('MAILJET_KEY')
+api_secret = os.environ.get('MAILJET_SECRET')
 mailjet = Client(auth=(api_key, api_secret), version='v3.1')
 
 

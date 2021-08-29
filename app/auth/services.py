@@ -145,6 +145,9 @@ def login_user(data):
     
 def refresh_current_token(data):
     refresh_token = refresh_tokens.find_one({'refresh_token': data['refresh_token']})
+    payload_response = jwt_decode(data['refresh_token'])
+    if payload_response['status'] == 'failed':
+        return payload_response
     if refresh_token is None:
         return {"status": 'failed', "exception": "refreshTokenForbiddenError"}
     else:        
