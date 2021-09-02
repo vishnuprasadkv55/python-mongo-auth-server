@@ -165,6 +165,10 @@ def insert_refresh_token_access_token_pair(created_by,refresh_token, access_toke
     "valid": True, 
     "created_by": created_by})
 
+def delete_token_family(family_id):
+    access_tokens.delete_many({'family_id': family_id})
+    refresh_tokens.delete_many({'family_id': family_id})
+
 def refresh_current_token(data):
     refresh_token = refresh_tokens.find_one({'refresh_token': data['refresh_token']})
 
@@ -176,11 +180,12 @@ def refresh_current_token(data):
         #     return {"status": 'failed', "exception": "accessTokenForbiddenError"}
         payload_response = jwt_decode(data['refresh_token'])
         if payload_response['status'] == 'failed' and not refresh_token['valid']:
-            access_tokens.delete_many({'family_id': refresh_token['family_id']})
-            refresh_tokens.delete_many({'family_id': refresh_token['family_id']})
+            delete_token_family(refresh_token['family_id'])
             return {'status': 'failed', 'exception': 'malpractice'}
         elif refresh_token['valid']: 
             if payload_response['status'] == 'failed':
+                if payload_response['exception'] == 'signatureExpired':
+                    delete_token_family(refresh_token['family_id'])
                 return payload_response
             refresh_tokens.update_one({'_id': refresh_token["_id"]}, {'$set': {'valid': False}})
             # payload_response = jwt_decode(access_token['access_token'])
