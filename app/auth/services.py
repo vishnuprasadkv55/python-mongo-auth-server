@@ -186,8 +186,9 @@ def refresh_current_token(data):
             if payload_response['status'] == 'failed':
                 if payload_response['exception'] == 'signatureExpired':
                     delete_token_family(refresh_token['family_id'])
-                return payload_response
+                return {'status': 'failed', 'exception': 'signatureExpired'}
             refresh_tokens.update_one({'_id': refresh_token["_id"]}, {'$set': {'valid': False}})
+            # access_tokens.update_one({'_id': refresh_token["_id"]}, {'$set': {'valid': False}})
             # payload_response = jwt_decode(access_token['access_token'])
             # if payload_response['status'] == 'failed':
             #     if payload_response['invalidToken']:
@@ -198,8 +199,14 @@ def refresh_current_token(data):
                 "username": payload_response['payload']['username'],
             }
             tokens = generate_access_token_refresh_token(payload)
-            # access_tokens.update_one({'_id': refresh_token['family_id']}, {'$set': {"access_token": new_access_token}})
-            insert_refresh_token_access_token_pair(refresh_token['created_by'], tokens['refresh_token'],tokens['access_token'],  refresh_token['family_id'])
+            access_tokens.update_one({'_id': refresh_token['family_id']}, {'$set': {"access_token": tokens['access_token']}})
+            refresh_tokens.insert_one({"family_id": refresh_token['family_id'], 
+            "created_at": datetime.utcnow(),
+            'refresh_token': tokens['refresh_token'],
+            'access_token': tokens['access_token'],             
+            'valid': True,
+            "created_by": refresh_token['created_by']})
+            # insert_refresh_token_access_token_pair(refresh_token['created_by'], tokens['refresh_token'],tokens['access_token'],  refresh_token['family_id'])
             return {'status': 'success', 'access_token': tokens['access_token'], 'refresh_token': tokens['refresh_token'] }
         
 
